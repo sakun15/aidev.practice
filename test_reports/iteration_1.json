@@ -1,0 +1,38 @@
+{
+  "summary": "First-finish smoke test of the AI-native SWE interview practice MVP. Backend endpoints (auth register/login/me/onboarding, challenges list+detail, submissions create/list, me/stats, duplicate register, invalid URL, wrong password) all return expected status codes and shapes. Frontend end-to-end user journey verified: landing -> signup -> onboarding (student/beginner) -> dashboard (4 stat cards) -> challenges (15 cards, Easy filter shows 5) -> challenge detail -> invalid+valid GitHub URL submission (error/success both shown) -> My Submissions (1 row rendered with View repo link) -> Profile (user_type=Student, ai_exp=Beginner) -> Settings logout -> /login -> protected route redirect to /login -> forgot-password success state (Check your inbox). Login with valid credentials returns to /dashboard.",
+  "tested_scope": ["frontend", "backend", "auth", "integration"],
+  "passed": [
+    "GET /api/challenges returns 200 with 15 seeded challenges",
+    "POST /api/auth/register sets cookies and returns user (200)",
+    "GET /api/auth/me returns authenticated user (200)",
+    "Duplicate signup returns 400 with 'Email already registered'",
+    "POST /api/auth/onboarding marks onboarded=true (200)",
+    "GET /api/challenges/{slug} returns problem detail (200)",
+    "POST /api/submissions with valid GitHub URL creates submission (200)",
+    "POST /api/submissions with invalid URL returns 422 pydantic error",
+    "GET /api/submissions returns user's submission list (200)",
+    "GET /api/me/stats returns attempts/solved/streak/score (200)",
+    "POST /api/auth/login wrong password returns 401",
+    "Landing page shows Sign in and Get started CTAs",
+    "Signup UI -> auto-redirect to /onboarding",
+    "Onboarding steps 1 & 2 -> /dashboard",
+    "Dashboard stat-solved/streak/score/attempts visible",
+    "Challenges page renders 15 cards; Easy filter narrows to 5",
+    "Challenge detail loads with submission form",
+    "Invalid GitHub URL shows submission-error; valid URL shows submission-success",
+    "My Submissions renders sub-{id} row with GitHub View repo link",
+    "Profile shows Student and Beginner labels",
+    "Settings logout redirects to /login and clears session (protected route redirect verified)",
+    "Login form re-authenticates and lands on /dashboard",
+    "Forgot password shows 'Check your inbox' success state"
+  ],
+  "failed": [],
+  "action_items": [
+    "Rate-limit lockout (5 failed logins -> 429) was intentionally NOT executed to avoid blocking other tests as instructed by the reviewer. Consider verifying manually or in a full-testing pass.",
+    "Reset password with a real token flow was not exercised (Resend disabled; token would need to be pulled from backend logs). Backend endpoint POST /auth/reset-password exists and UI has /reset-password?token= route with 'Missing reset token' disabled state — recommend verifying end-to-end in full testing pass."
+  ],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "test_credentials": "Registered fresh account via /signup as instructed (uitest_1782931058@example.com / Password1). Admin creds from /app/memory/test_credentials.md not required for user flows."
+}
