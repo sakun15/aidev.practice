@@ -51,6 +51,13 @@ detail with GitHub submission, profile, and clean sidebar navigation.
 - Emails are sent via **Resend** from `onboarding@resend.dev` for both flows; OTP + reset link are also logged to backend logs for dev retrieval
 - Rate limits: 3 requests / 15 min per email on both signup OTPs and forgot-password tokens
 
+## Iteration 4 (2026-07-02) — Unified OTP + Real Resend delivery confirmed
+- **Single shared OTP helper** used by both signup verification and forgot-password: `_issue_otp`, `_verify_otp`, `_otp_rate_limit`, `_otp_resend_cooldown` operating on one `otps` collection with a `purpose` field ("signup" | "reset")
+- **10-min expiry**, 5-attempt cap, 30s resend cooldown, 3-per-15-min rate limit — identical for both flows
+- All reset-link code removed: `password_reset_tokens` collection unused, `send_reset_link_email` deleted, `ResetPassword.jsx` deleted, `/reset-password` route removed
+- **Real Resend delivery confirmed** to sakundhayal969@gmail.com (message IDs c3d706d1…, f2c25109…). User visually verified both emails arrived with correct subjects, OTP codes, and body copy.
+- Sandbox limitation documented: `onboarding@resend.dev` only delivers to the Resend account owner. Custom domain verification required before onboarding other users.
+
 ## Deferred / backlog (P1/P2)
 - P1: Repository analysis (LLM grading + acceptance criteria checks)
 - P1: Streaks and scoring based on real activity
