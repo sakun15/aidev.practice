@@ -43,6 +43,14 @@ detail with GitHub submission, profile, and clean sidebar navigation.
 - Success redirects to `/login?reset=1` with a green "Password updated" banner
 - Mongo client now `tz_aware=True` to safely compare stored expiries
 
+## Iteration 3 (2026-07-02) — Resend integration (real API key)
+- Signup now requires **email verification** (6-digit OTP, 5-min expiry) before login is allowed
+- New `/verify-email?email=...` page with 5:00 countdown, 30s resend cooldown, 5-attempt cap
+- `verified=true` gate on login (403 until verified); unverified re-signup replaces password + re-issues OTP
+- Forgot Password switched to **link-based** (secrets.token_urlsafe(32), stored bcrypt-hashed, 15-min expiry)
+- Emails are sent via **Resend** from `onboarding@resend.dev` for both flows; OTP + reset link are also logged to backend logs for dev retrieval
+- Rate limits: 3 requests / 15 min per email on both signup OTPs and forgot-password tokens
+
 ## Deferred / backlog (P1/P2)
 - P1: Repository analysis (LLM grading + acceptance criteria checks)
 - P1: Streaks and scoring based on real activity
