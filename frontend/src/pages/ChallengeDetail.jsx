@@ -24,7 +24,8 @@ export default function ChallengeDetail() {
     setErr("");
     setSubmitting(true);
     try {
-      await api.post("/submissions", { challenge_id: slug, github_url: github });
+      const { data } = await api.post("/submissions", { challenge_id: slug, github_url: github });
+      if (data?.eval_enabled) { navigate(`/submissions/${data.id}/interview`); return; }
       setSuccess(true);
       setGithub("");
     } catch (e) {

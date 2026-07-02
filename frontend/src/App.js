@@ -14,6 +14,7 @@ import Dashboard from "@/pages/Dashboard";
 import Challenges from "@/pages/Challenges";
 import ChallengeDetail from "@/pages/ChallengeDetail";
 import MySubmissions from "@/pages/MySubmissions";
+import InterviewSession, { Report } from "@/pages/InterviewSession";
 import Profile from "@/pages/Profile";
 import Settings from "@/pages/Settings";
 
@@ -45,6 +46,8 @@ function App() {
               <Route path="/challenges" element={<Challenges />} />
               <Route path="/challenges/:slug" element={<ChallengeDetail />} />
               <Route path="/submissions" element={<MySubmissions />} />
+              <Route path="/submissions/:id/interview" element={<InterviewSession />} />
+              <Route path="/submissions/:id/report" element={<Report />} />
               <Route path="/profile" element={<Profile />} />
               <Route path="/settings" element={<Settings />} />
             </Route>

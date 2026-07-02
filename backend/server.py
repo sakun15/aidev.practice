@@ -558,6 +558,13 @@ async def get_challenge(slug: str):
 
 
 # ---------- Submissions ----------
+from ai_service import get_ai_service
+from github_fetch import parse_repo, fetch_repo_files
+
+
+EVAL_ENABLED_SLUGS = {"login-page"}
+
+
 @api.post("/submissions")
 async def create_submission(req: SubmissionRequest, user: dict = Depends(get_current_user)):
     challenge = await db.challenges.find_one({"slug": req.challenge_id}, {"_id": 0})
@@ -570,12 +577,59 @@ async def create_submission(req: SubmissionRequest, user: dict = Depends(get_cur
         "challenge_difficulty": challenge["difficulty"],
         "github_url": req.github_url,
         "created_at": datetime.now(timezone.utc),
+        "status": "submitted",
     }
     res = await db.submissions.insert_one(doc)
-    doc["id"] = str(res.inserted_id)
-    doc["created_at"] = doc["created_at"].isoformat()
-    doc.pop("_id", None)
+    sub_id = str(res.inserted_id)
+
+    if req.challenge_id in EVAL_ENABLED_SLUGS:
+        try:
+            owner, name = parse_repo(req.github_url)
+            files = await fetch_repo_files(owner, name)
+            analysis = await get_ai_service().analyze_repo(challenge, files)
+            await db.submissions.update_one({"_id": res.inserted_id},
+                {"$set": {"analysis": analysis, "file_count": len(files), "status": "analyzed",
+                          "analyzed_at": datetime.now(timezone.utc)}})
+        except Exception as e:
+            logger.error(f"Analysis failed for {sub_id}: {e}")
+            await db.submissions.update_one({"_id": res.inserted_id},
+                {"$set": {"status": "analysis_failed", "analysis_error": str(e)}})
+
+    return {"id": sub_id, "challenge_slug": req.challenge_id, "github_url": req.github_url,
+            "created_at": doc["created_at"].isoformat(), "eval_enabled": req.challenge_id in EVAL_ENABLED_SLUGS}
+
+
+@api.get("/submissions/{sub_id}")
+async def get_submission(sub_id: str, user: dict = Depends(get_current_user)):
+    try:
+        doc = await db.submissions.find_one({"_id": ObjectId(sub_id), "user_id": str(user["_id"])})
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not doc:
+        raise HTTPException(status_code=404, detail="Not found")
+    doc["id"] = str(doc.pop("_id"))
+    for k in ("created_at", "analyzed_at", "graded_at"):
+        if isinstance(doc.get(k), datetime):
+            doc[k] = doc[k].isoformat()
     return doc
+
+
+@api.post("/submissions/{sub_id}/answers")
+async def submit_answers(sub_id: str, payload: dict, user: dict = Depends(get_current_user)):
+    try:
+        doc = await db.submissions.find_one({"_id": ObjectId(sub_id), "user_id": str(user["_id"])})
+    except Exception:
+        raise HTTPException(status_code=404, detail="Not found")
+    if not doc or not doc.get("analysis"):
+        raise HTTPException(status_code=400, detail="No analysis available for this submission")
+    questions = doc["analysis"].get("questions", [])
+    answers_map = payload.get("answers", {})
+    ordered = [answers_map.get(q["id"], "") for q in questions]
+    grades = await get_ai_service().grade_answers(questions, ordered)
+    await db.submissions.update_one({"_id": ObjectId(sub_id)},
+        {"$set": {"answers": answers_map, "grades": grades, "status": "graded",
+                  "graded_at": datetime.now(timezone.utc)}})
+    return {"ok": True, "grades": grades}
 
 
 @api.get("/submissions")
