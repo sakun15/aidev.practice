@@ -36,6 +36,13 @@ detail with GitHub submission, profile, and clean sidebar navigation.
 - Landing, Login, Signup, Forgot, Reset, Onboarding, Dashboard, Challenges,
   ChallengeDetail, MySubmissions, Profile, Settings, ProtectedRoute, AppShell
 
+## Iteration 2 (2026-07-02) — Auth + Forgot Password v2
+- Login: on-blur email format validation; distinct errors for unregistered email (404) vs wrong password (401)
+- Forgot password rebuilt as a 3-step OTP flow (email → 6-digit code → new password)
+- Backend: OTP hashed with bcrypt, 10-min expiry, 5-attempt limit, 30s resend cooldown, 3 req/15min rate limit
+- Success redirects to `/login?reset=1` with a green "Password updated" banner
+- Mongo client now `tz_aware=True` to safely compare stored expiries
+
 ## Deferred / backlog (P1/P2)
 - P1: Repository analysis (LLM grading + acceptance criteria checks)
 - P1: Streaks and scoring based on real activity
