@@ -4,7 +4,7 @@ import { api, errText } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { Sparkles, ArrowLeft } from "lucide-react";
 
-const OTP_TTL = 5 * 60;
+const OTP_TTL = 10 * 60;
 const RESEND_COOLDOWN = 30;
 
 export default function VerifyEmail() {
@@ -82,7 +82,7 @@ export default function VerifyEmail() {
 
         <h1 className="font-display text-[28px] font-semibold tracking-tight">Verify your email</h1>
         <p className="text-body-sm text-fog mt-2">
-          We sent a 6-digit code to <span className="text-graphite">{email}</span>. It expires in 5 minutes.
+          We sent a 6-digit code to <span className="text-graphite">{email}</span>. It expires in 10 minutes.
         </p>
 
         <form onSubmit={verify} className="mt-8 space-y-4">
