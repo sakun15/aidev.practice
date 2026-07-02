@@ -1,0 +1,30 @@
+{
+  "summary": "Verified auth error-mapping and 3-step OTP forgot-password flow end-to-end. All 15 in-scope checks passed (backend endpoints + full frontend flow including OTP retrieved from backend logs and new-password login).",
+  "tested_scope": ["frontend", "backend", "auth", "integration"],
+  "passed": [
+    "Backend POST /api/auth/login unregistered -> 404 with 'This email is not registered...'",
+    "Backend POST /api/auth/login wrong password -> 401 with 'Incorrect password. Please try again.'",
+    "Backend POST /api/auth/forgot-password/request -> 200 for registered email; OTP logged as '[OTP] Password reset code for <email>: NNNNNN'",
+    "Backend POST /api/auth/forgot-password/resend within 30s -> 429 'Please wait Ns before requesting another code.'",
+    "Login: invalid email format on blur shows 'Please enter a valid email address' in data-testid=login-email-error",
+    "Login: unregistered email shows 'This email is not registered...' in login-email-error",
+    "Login: wrong password shows 'Incorrect password. Please try again.' in login-password-error",
+    "Login: 'Forgot password?' (login-forgot) navigates to /forgot-password",
+    "ForgotPassword step1: invalid email on blur -> 'Please enter a valid email address' in forgot-email-error",
+    "ForgotPassword step1: unregistered email -> 'No account found with this email' in forgot-email-error",
+    "ForgotPassword step1: registered email advances to forgot-step-2",
+    "ForgotPassword step2: forgot-timer shows 'Expires in 10:00'; forgot-resend disabled with 'Resend in 31s' cooldown",
+    "ForgotPassword step2: wrong OTP '000000' -> 'Invalid code, please try again. 4 attempts remaining.' in forgot-otp-error",
+    "ForgotPassword step2: correct OTP (from backend logs) advances to forgot-step-3",
+    "ForgotPassword step3: mismatched passwords -> 'Passwords do not match' in reset-mismatch",
+    "ForgotPassword step3: weak password -> 'Password must be at least 8 characters and include a number' in reset-error",
+    "ForgotPassword step3: strong matching passwords redirect to /login?reset=1 with green banner 'Password updated. Please log in.' (login-reset-success)",
+    "Login with the new password succeeds (session established, redirected to /onboarding as expected for new unonboarded user)"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "notes": "Post-reset login redirected to /onboarding rather than /dashboard because the test user was newly registered with onboarded=false. This is expected app behavior and not a regression in the auth/forgot-password scope of this iteration."
+}

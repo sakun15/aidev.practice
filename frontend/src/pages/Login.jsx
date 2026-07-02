@@ -1,29 +1,53 @@
-import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useState } from "react";
 import { api, errText } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
-import { Sparkles } from "lucide-react";
+import { Sparkles, CheckCircle2 } from "lucide-react";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function Login() {
   const { setUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
+  const [params] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
+  const [emailError, setEmailError] = useState("");
+  const [passwordError, setPasswordError] = useState("");
+  const [formError, setFormError] = useState("");
   const [loading, setLoading] = useState(false);
+  const passwordReset = params.get("reset") === "1";
+
+  const validateEmail = () => {
+    if (!email) { setEmailError(""); return false; }
+    if (!EMAIL_RE.test(email.trim())) {
+      setEmailError("Please enter a valid email address");
+      return false;
+    }
+    setEmailError("");
+    return true;
+  };
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    setError("");
+    setEmailError(""); setPasswordError(""); setFormError("");
+    if (!EMAIL_RE.test(email.trim())) {
+      setEmailError("Please enter a valid email address");
+      return;
+    }
     setLoading(true);
     try {
-      const { data } = await api.post("/auth/login", { email, password });
+      const { data } = await api.post("/auth/login", { email: email.trim(), password });
       setUser(data);
       const dest = data.onboarded ? "/dashboard" : "/onboarding";
       navigate(location.state?.from?.pathname || dest, { replace: true });
     } catch (err) {
-      setError(errText(err));
+      const status = err?.response?.status;
+      const msg = errText(err);
+      if (status === 404) setEmailError("This email is not registered. Please sign up or check your spelling.");
+      else if (status === 401) setPasswordError("Incorrect password. Please try again.");
+      else setFormError(msg);
     } finally {
       setLoading(false);
     }
@@ -56,27 +80,42 @@ export default function Login() {
           <h1 className="font-display text-[32px] font-semibold tracking-tight text-graphite">Sign in</h1>
           <p className="text-body-sm text-fog mt-2">Enter your email and password to continue.</p>
 
-          <form onSubmit={onSubmit} className="mt-8 space-y-4" data-testid="login-form">
+          {passwordReset && (
+            <div className="mt-6 p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-body-sm flex items-center gap-2" data-testid="login-reset-success">
+              <CheckCircle2 size={15} /> Password updated. Please log in.
+            </div>
+          )}
+
+          <form onSubmit={onSubmit} className="mt-6 space-y-4" data-testid="login-form" noValidate>
             <div>
               <label className="label" htmlFor="email">Email</label>
               <input
                 id="email" type="email" autoComplete="email" required
                 className="field" data-testid="login-email"
-                value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com"
+                value={email}
+                onChange={(e) => { setEmail(e.target.value); if (emailError) setEmailError(""); }}
+                onBlur={validateEmail}
+                placeholder="you@example.com"
+                aria-invalid={!!emailError}
               />
+              {emailError && <div className="text-caption text-red-600 mt-1" data-testid="login-email-error">{emailError}</div>}
             </div>
             <div>
               <div className="flex items-center justify-between">
                 <label className="label" htmlFor="password">Password</label>
-                <Link to="/forgot-password" className="text-[12px] link-blue" data-testid="login-forgot">Forgot?</Link>
+                <Link to="/forgot-password" className="text-[12px] link-blue" data-testid="login-forgot">Forgot password?</Link>
               </div>
               <input
                 id="password" type="password" autoComplete="current-password" required
                 className="field" data-testid="login-password"
-                value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); if (passwordError) setPasswordError(""); }}
+                placeholder="••••••••"
+                aria-invalid={!!passwordError}
               />
+              {passwordError && <div className="text-caption text-red-600 mt-1" data-testid="login-password-error">{passwordError}</div>}
             </div>
-            {error && <div className="text-body-sm text-red-600" data-testid="login-error">{error}</div>}
+            {formError && <div className="text-body-sm text-red-600" data-testid="login-error">{formError}</div>}
             <button type="submit" disabled={loading} className="btn-pill btn-primary w-full" data-testid="login-submit">
               {loading ? "Signing in…" : "Sign in"}
             </button>
