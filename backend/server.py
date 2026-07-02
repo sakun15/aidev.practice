@@ -93,6 +93,7 @@ def user_public(user: dict) -> dict:
         "ai_experience": user.get("ai_experience"),
         "user_type": user.get("user_type"),
         "onboarded": bool(user.get("onboarded", False)),
+        "verified": bool(user.get("verified", False)),
         "created_at": user["created_at"].isoformat() if isinstance(user.get("created_at"), datetime) else user.get("created_at"),
     }
 
@@ -146,6 +147,24 @@ class ForgotPasswordRequest(BaseModel):
     email: EmailStr
 
 
+class VerifySignupRequest(BaseModel):
+    email: EmailStr
+    code: str
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def strong(cls, v: str) -> str:
+        if not STRONG_PW.match(v):
+            raise ValueError("Password must be at least 8 characters and include a letter and a number")
+        return v
+
+
 class OtpVerifyRequest(BaseModel):
     email: EmailStr
     code: str
@@ -193,30 +212,158 @@ async def root():
 
 
 # ---------- Auth routes ----------
+async def send_signup_otp_email(email: str, code: str) -> None:
+    logger.info(f"[SIGNUP-OTP] Verification code for {email}: {code}")
+    if not resend.api_key:
+        return
+    html = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f5f5f7;padding:40px 20px;">
+      <table style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:40px;">
+        <tr><td>
+          <h1 style="font-size:28px;color:#1d1d1f;margin:0 0 16px;letter-spacing:-0.4px;">Verify your email</h1>
+          <p style="font-size:17px;color:#333333;line-height:1.5;margin:0 0 24px;">Welcome to aidev.practice. Enter this 6-digit code to activate your account. It expires in 5 minutes.</p>
+          <div style="font-size:36px;font-weight:700;letter-spacing:8px;color:#1d1d1f;background:#f5f5f7;border-radius:12px;padding:20px;text-align:center;">{code}</div>
+          <p style="font-size:13px;color:#707070;margin-top:24px;">If you didn't create this account, you can safely ignore this email.</p>
+        </td></tr>
+      </table>
+    </div>
+    """
+    try:
+        await asyncio.to_thread(resend.Emails.send, {
+            "from": SENDER_EMAIL, "to": [email],
+            "subject": "Verify your aidev.practice account", "html": html,
+        })
+    except Exception as e:
+        logger.error(f"Resend signup OTP failed: {e}")
+
+
+async def send_reset_link_email(email: str, link: str) -> None:
+    logger.info(f"[RESET-LINK] Password reset link for {email}: {link}")
+    if not resend.api_key:
+        return
+    html = f"""
+    <div style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;background:#f5f5f7;padding:40px 20px;">
+      <table style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;padding:40px;">
+        <tr><td>
+          <h1 style="font-size:28px;color:#1d1d1f;margin:0 0 16px;letter-spacing:-0.4px;">Reset your password</h1>
+          <p style="font-size:17px;color:#333333;line-height:1.5;margin:0 0 24px;">Click the button below to set a new password. This link expires in 15 minutes.</p>
+          <a href="{link}" style="display:inline-block;background:#0071e3;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:980px;font-size:15px;">Reset password</a>
+          <p style="font-size:13px;color:#707070;margin-top:24px;">Or paste this URL into your browser:<br><span style="color:#1d1d1f;word-break:break-all;">{link}</span></p>
+          <p style="font-size:13px;color:#707070;margin-top:16px;">If you didn't request this, you can safely ignore this email.</p>
+        </td></tr>
+      </table>
+    </div>
+    """
+    try:
+        await asyncio.to_thread(resend.Emails.send, {
+            "from": SENDER_EMAIL, "to": [email],
+            "subject": "Reset your aidev.practice password", "html": html,
+        })
+    except Exception as e:
+        logger.error(f"Resend reset link failed: {e}")
+
+
+async def _issue_signup_otp(email: str) -> None:
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    await db.signup_otps.update_many(
+        {"email": email, "used": False},
+        {"$set": {"used": True, "invalidated_at": datetime.now(timezone.utc)}},
+    )
+    await db.signup_otps.insert_one({
+        "email": email,
+        "code_hash": hash_password(code),
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
+        "attempts": 0,
+        "used": False,
+        "created_at": datetime.now(timezone.utc),
+    })
+    await send_signup_otp_email(email, code)
+
+
+async def _signup_rate_limit(email: str) -> None:
+    since = datetime.now(timezone.utc) - timedelta(minutes=15)
+    recent = await db.signup_otps.count_documents({"email": email, "created_at": {"$gte": since}})
+    if recent >= 3:
+        raise HTTPException(status_code=429, detail="Too many code requests. Please try again in 15 minutes.")
+
+
+async def _signup_resend_cooldown(email: str) -> None:
+    latest = await db.signup_otps.find_one({"email": email}, sort=[("created_at", -1)])
+    if latest and (datetime.now(timezone.utc) - latest["created_at"]).total_seconds() < 30:
+        remaining = int(30 - (datetime.now(timezone.utc) - latest["created_at"]).total_seconds())
+        raise HTTPException(status_code=429, detail=f"Please wait {remaining}s before requesting another code.")
+
+
 @api.post("/auth/register")
-async def register(req: RegisterRequest, response: Response):
+async def register(req: RegisterRequest):
     if req.password != req.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
     email = req.email.lower().strip()
     existing = await db.users.find_one({"email": email})
     if existing:
-        raise HTTPException(status_code=400, detail="Email already registered")
-    doc = {
-        "full_name": req.full_name.strip(),
-        "email": email,
-        "password_hash": hash_password(req.password),
-        "role": "user",
-        "ai_experience": None,
-        "user_type": None,
-        "onboarded": False,
-        "created_at": datetime.now(timezone.utc),
-    }
-    res = await db.users.insert_one(doc)
-    doc["_id"] = res.inserted_id
-    access = create_access_token(str(res.inserted_id), email)
-    refresh = create_refresh_token(str(res.inserted_id))
+        if existing.get("verified"):
+            raise HTTPException(status_code=400, detail="Email already registered")
+        # Unverified re-registration: reset password hash and re-issue OTP
+        await db.users.update_one({"_id": existing["_id"]},
+                                  {"$set": {"password_hash": hash_password(req.password),
+                                            "full_name": req.full_name.strip()}})
+    else:
+        await db.users.insert_one({
+            "full_name": req.full_name.strip(),
+            "email": email,
+            "password_hash": hash_password(req.password),
+            "role": "user",
+            "ai_experience": None,
+            "user_type": None,
+            "onboarded": False,
+            "verified": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+    await _signup_rate_limit(email)
+    await _issue_signup_otp(email)
+    return {"email": email, "verification_required": True}
+
+
+@api.post("/auth/verify-email")
+async def verify_email(req: VerifySignupRequest, response: Response):
+    email = req.email.lower().strip()
+    code = (req.code or "").strip()
+    doc = await db.signup_otps.find_one({"email": email, "used": False}, sort=[("created_at", -1)])
+    if not doc:
+        raise HTTPException(status_code=400, detail="No active code. Request a new one.")
+    if doc["expires_at"] < datetime.now(timezone.utc):
+        raise HTTPException(status_code=400, detail="Code expired. Please request a new one.")
+    if doc.get("attempts", 0) >= 5:
+        await db.signup_otps.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
+        raise HTTPException(status_code=429, detail="Too many wrong attempts. Please request a new code.")
+    if not verify_password(code, doc["code_hash"]):
+        await db.signup_otps.update_one({"_id": doc["_id"]}, {"$inc": {"attempts": 1}})
+        attempts_left = 5 - (doc.get("attempts", 0) + 1)
+        raise HTTPException(status_code=400, detail=f"Invalid code, please try again. {attempts_left} attempts remaining.")
+    await db.signup_otps.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=400, detail="Account not found")
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"verified": True}})
+    user["verified"] = True
+    access = create_access_token(str(user["_id"]), email)
+    refresh = create_refresh_token(str(user["_id"]))
     set_auth_cookies(response, access, refresh)
-    return user_public(doc)
+    return user_public(user)
+
+
+@api.post("/auth/resend-verification")
+async def resend_verification(req: ForgotPasswordRequest):
+    email = req.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found with this email")
+    if user.get("verified"):
+        raise HTTPException(status_code=400, detail="Account is already verified")
+    await _signup_rate_limit(email)
+    await _signup_resend_cooldown(email)
+    await _issue_signup_otp(email)
+    return {"ok": True, "message": "Code resent"}
 
 
 @api.post("/auth/login")
@@ -242,6 +389,10 @@ async def login(req: LoginRequest, request: Request, response: Response):
             upsert=True,
         )
         raise HTTPException(status_code=401, detail="Incorrect password. Please try again.")
+
+    if not user.get("verified"):
+        raise HTTPException(status_code=403, detail="Please verify your email before signing in.")
+
 
     await db.login_attempts.delete_one({"identifier": key})
     access = create_access_token(str(user["_id"]), email)
@@ -308,115 +459,51 @@ async def send_otp_email(email: str, code: str) -> None:
         logger.error(f"Resend send failed: {e}")
 
 
-async def _issue_otp(email: str) -> None:
-    """Generate + store OTP and email it. Invalidates prior codes for the email."""
-    code = f"{secrets.randbelow(1_000_000):06d}"
-    await db.password_reset_otps.update_many(
-        {"email": email, "used": False},
-        {"$set": {"used": True, "invalidated_at": datetime.now(timezone.utc)}},
-    )
-    await db.password_reset_otps.insert_one({
-        "email": email,
-        "code_hash": hash_password(code),
-        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10),
-        "attempts": 0,
-        "used": False,
-        "created_at": datetime.now(timezone.utc),
-    })
-    await send_otp_email(email, code)
-
-
-async def _check_rate_limit(email: str) -> None:
-    """Max 3 OTP requests per email in 15 minutes."""
-    since = datetime.now(timezone.utc) - timedelta(minutes=15)
-    recent = await db.password_reset_otps.count_documents({"email": email, "created_at": {"$gte": since}})
-    if recent >= 3:
-        raise HTTPException(status_code=429, detail="Too many code requests. Please try again in 15 minutes.")
-
-
-async def _check_resend_cooldown(email: str) -> None:
-    """30-second cooldown between resends."""
-    latest = await db.password_reset_otps.find_one({"email": email}, sort=[("created_at", -1)])
-    if latest and (datetime.now(timezone.utc) - latest["created_at"]).total_seconds() < 30:
-        remaining = int(30 - (datetime.now(timezone.utc) - latest["created_at"]).total_seconds())
-        raise HTTPException(status_code=429, detail=f"Please wait {remaining}s before requesting another code.")
-
-
-@api.post("/auth/forgot-password/request")
-async def forgot_request(req: ForgotPasswordRequest):
+@api.post("/auth/forgot-password")
+async def forgot_password(req: ForgotPasswordRequest):
     email = req.email.lower().strip()
     user = await db.users.find_one({"email": email})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email")
-    await _check_rate_limit(email)
-    await _issue_otp(email)
-    return {"ok": True, "message": "Code sent"}
+    # Always respond success to prevent enumeration
+    if user:
+        # Rate limit: max 3 reset links per email per 15 min
+        since = datetime.now(timezone.utc) - timedelta(minutes=15)
+        recent = await db.password_reset_tokens.count_documents({"user_id": str(user["_id"]), "created_at": {"$gte": since}})
+        if recent >= 3:
+            raise HTTPException(status_code=429, detail="Too many reset requests. Please try again in 15 minutes.")
+        token = secrets.token_urlsafe(32)
+        await db.password_reset_tokens.insert_one({
+            "token_hash": hash_password(token),
+            "user_id": str(user["_id"]),
+            "email": email,
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+            "used": False,
+            "created_at": datetime.now(timezone.utc),
+        })
+        link = f"{FRONTEND_URL}/reset-password?token={token}&email={email}"
+        await send_reset_link_email(email, link)
+    return {"ok": True, "message": "If an account exists, a reset link has been sent."}
 
 
-@api.post("/auth/forgot-password/resend")
-async def forgot_resend(req: ForgotPasswordRequest):
-    email = req.email.lower().strip()
-    user = await db.users.find_one({"email": email})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found with this email")
-    await _check_rate_limit(email)
-    await _check_resend_cooldown(email)
-    await _issue_otp(email)
-    return {"ok": True, "message": "Code resent"}
-
-
-@api.post("/auth/forgot-password/verify")
-async def forgot_verify(req: OtpVerifyRequest):
-    email = req.email.lower().strip()
-    code = (req.code or "").strip()
-    doc = await db.password_reset_otps.find_one({"email": email, "used": False}, sort=[("created_at", -1)])
-    if not doc:
-        raise HTTPException(status_code=400, detail="No active code. Request a new one.")
-    if doc["expires_at"] < datetime.now(timezone.utc):
-        raise HTTPException(status_code=400, detail="Code expired")
-    if doc.get("attempts", 0) >= 5:
-        await db.password_reset_otps.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
-        raise HTTPException(status_code=429, detail="Too many wrong attempts. Request a new code.")
-    if not verify_password(code, doc["code_hash"]):
-        await db.password_reset_otps.update_one({"_id": doc["_id"]}, {"$inc": {"attempts": 1}})
-        attempts_left = 5 - (doc.get("attempts", 0) + 1)
-        raise HTTPException(status_code=400, detail=f"Invalid code, please try again. {attempts_left} attempts remaining.")
-    # Issue short-lived verification token bound to the OTP _id, so it can be used exactly once
-    token = jwt.encode(
-        {"sub": email, "otp_id": str(doc["_id"]), "type": "otp_verified",
-         "exp": datetime.now(timezone.utc) + timedelta(minutes=15)},
-        get_jwt_secret(), algorithm=JWT_ALGORITHM,
-    )
-    return {"verification_token": token}
-
-
-@api.post("/auth/forgot-password/reset")
-async def forgot_reset(req: OtpResetRequest):
+@api.post("/auth/reset-password")
+async def reset_password(req: ResetPasswordRequest):
     if req.new_password != req.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match")
-    try:
-        payload = jwt.decode(req.verification_token, get_jwt_secret(), algorithms=[JWT_ALGORITHM])
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=400, detail="Verification session expired. Please start over.")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=400, detail="Invalid verification token")
-    if payload.get("type") != "otp_verified":
-        raise HTTPException(status_code=400, detail="Invalid verification token")
-
-    email = payload["sub"]
-    otp_id = payload["otp_id"]
-    otp = await db.password_reset_otps.find_one({"_id": ObjectId(otp_id)})
-    if not otp or otp.get("used"):
-        raise HTTPException(status_code=400, detail="This verification has already been used. Please start over.")
-
-    user = await db.users.find_one({"email": email})
-    if not user:
-        raise HTTPException(status_code=400, detail="Account not found")
-
-    await db.users.update_one({"_id": user["_id"]}, {"$set": {"password_hash": hash_password(req.new_password)}})
-    await db.password_reset_otps.update_one({"_id": otp["_id"]}, {"$set": {"used": True}})
-    # Clear login lockouts for this user
-    await db.login_attempts.delete_many({"identifier": {"$regex": f":{email}$"}})
+    # Find an active, unexpired token that matches
+    since = datetime.now(timezone.utc)
+    candidates = await db.password_reset_tokens.find(
+        {"used": False, "expires_at": {"$gt": since}}
+    ).sort("created_at", -1).limit(50).to_list(50)
+    doc = None
+    for c in candidates:
+        if verify_password(req.token, c["token_hash"]):
+            doc = c
+            break
+    if not doc:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset link. Please request a new one.")
+    await db.users.update_one({"_id": ObjectId(doc["user_id"])},
+                              {"$set": {"password_hash": hash_password(req.new_password)}})
+    await db.password_reset_tokens.update_one({"_id": doc["_id"]}, {"$set": {"used": True}})
+    await db.login_attempts.delete_many({"identifier": {"$regex": f":{doc['email']}$"}})
     return {"ok": True, "message": "Password updated. Please log in."}
 
 
@@ -582,8 +669,8 @@ async def ensure_indexes():
     await db.challenges.create_index("slug", unique=True)
     await db.submissions.create_index([("user_id", 1), ("created_at", -1)])
     await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
-    await db.password_reset_otps.create_index("expires_at", expireAfterSeconds=0)
-    await db.password_reset_otps.create_index([("email", 1), ("created_at", -1)])
+    await db.signup_otps.create_index("expires_at", expireAfterSeconds=0)
+    await db.signup_otps.create_index([("email", 1), ("created_at", -1)])
     await db.login_attempts.create_index("identifier")
 
 

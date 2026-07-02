@@ -26,9 +26,8 @@ export default function Signup() {
     if (form.password !== form.confirm_password) { setError("Passwords do not match"); return; }
     setLoading(true);
     try {
-      const { data } = await api.post("/auth/register", form);
-      setUser(data);
-      navigate("/onboarding", { replace: true });
+      await api.post("/auth/register", form);
+      navigate(`/verify-email?email=${encodeURIComponent(form.email.trim().toLowerCase())}`, { replace: true });
     } catch (err) {
       setError(errText(err));
     } finally {

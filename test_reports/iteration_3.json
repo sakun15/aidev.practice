@@ -1,0 +1,32 @@
+{
+  "summary": "Comprehensive backend + frontend testing of new OTP-based email verification and link-based password reset. All 13 backend curl checks passed (register→verification_required, login-before-verify 403, wrong OTP 400 with attempts, correct OTP 200 + cookies + verified=true, login after verify 200, resend cooldown 429, forgot 200, mismatch 400, weak-password 422, valid reset 200, token reuse 400, login with new password 200, signup rate limit 429 on 4th, forgot rate limit 429 on 4th). Frontend flow (signup → /verify-email → wrong+correct OTP → /onboarding, and forgot → /reset-password → /login?reset=1) all worked with correct data-testids, timer, resend cooldown label, inline mismatch, and email-format error.",
+  "tested_scope": ["backend", "frontend", "auth", "integration"],
+  "passed": [
+    "POST /auth/register returns {verification_required:true}, no auth cookies set, backend logs OTP",
+    "POST /auth/login returns 403 with 'Please verify your email before signing in.' when unverified",
+    "POST /auth/verify-email wrong code -> 400 'Invalid code, please try again. 4 attempts remaining.'",
+    "POST /auth/verify-email correct code -> 200, sets cookies, verified=true",
+    "POST /auth/login after verify -> 200 with user payload",
+    "POST /auth/resend-verification within 30s -> 429 'Please wait 29s...'",
+    "POST /auth/forgot-password -> 200 with generic message; backend logs '[RESET-LINK] ...token=...'",
+    "POST /auth/reset-password mismatched -> 400 'Passwords do not match'",
+    "POST /auth/reset-password weak password (abc) -> 422 Pydantic validation error",
+    "POST /auth/reset-password valid -> 200 'Password updated. Please log in.'",
+    "Reused reset token -> 400 'Invalid or expired reset link. Please request a new one.'",
+    "Login with new password after reset -> 200",
+    "Signup OTP rate limit: 4th register on same unverified email -> 429 'Too many code requests...'",
+    "Forgot-password rate limit: 4th request on same email -> 429 'Too many reset requests...'",
+    "Frontend /verify-email shows verify-timer 'Expires in 05:00', verify-resend 'Resend in 30s', verify-otp, verify-submit, and verify-otp-error inline",
+    "Frontend signup redirects to /verify-email?email=... after register",
+    "Frontend /verify-email on correct OTP redirects to /onboarding",
+    "Frontend /forgot-password shows forgot-email-error 'Please enter a valid email address' on blur with invalid email",
+    "Frontend /forgot-password shows forgot-success ('Check your inbox') after valid submission",
+    "Frontend /reset-password shows reset-mismatch 'Passwords do not match' inline, and on valid submit navigates to /login?reset=1"
+  ],
+  "failed": [],
+  "action_items": [],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "retest_needed": false,
+  "full_testing_deferred": true,
+  "notes": "Verified that when the browser session already has valid auth cookies (e.g., immediately after verify-email in the same tab), navigating to /login?reset=1 briefly hits the login route but the app-level auth redirect sends the user to /onboarding, so the login-reset-success banner is only visible to unauthenticated users. This matches the intended flow (real user comes from an email link in a fresh/logged-out session) and is not a bug."
+}
